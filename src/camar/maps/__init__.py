@@ -1,6 +1,7 @@
 from .base import base_map
 from .batched_string_grid import batched_string_grid
 from .caves_cont import caves_cont
+from .enc_map import ENCProjection, enc_map
 from .labmaze_grid import labmaze_grid
 from .movingai import movingai
 from .random_grid import random_grid
@@ -14,4 +15,6 @@ __all__ = [
     "labmaze_grid",
     "movingai",
     "caves_cont",
+    "enc_map",
+    "ENCProjection",
 ]

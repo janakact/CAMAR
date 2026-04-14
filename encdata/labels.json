@@ -1,0 +1,184 @@
+{
+  "23": {
+    "type": "tss",
+    "direction": 261.0
+  },
+  "34": {
+    "type": "anchorage"
+  },
+  "35": {
+    "type": "anchorage"
+  },
+  "36": {
+    "type": "anchorage"
+  },
+  "50": {
+    "type": "anchorage"
+  },
+  "51": {
+    "type": "anchorage"
+  },
+  "37": {
+    "type": "anchorage"
+  },
+  "29": {
+    "type": "anchorage"
+  },
+  "24": {
+    "type": "anchorage"
+  },
+  "65": {
+    "type": "anchorage"
+  },
+  "38": {
+    "type": "anchorage"
+  },
+  "39": {
+    "type": "anchorage"
+  },
+  "25": {
+    "type": "anchorage"
+  },
+  "26": {
+    "type": "anchorage"
+  },
+  "41": {
+    "type": "anchorage"
+  },
+  "42": {
+    "type": "anchorage"
+  },
+  "27": {
+    "type": "anchorage"
+  },
+  "28": {
+    "type": "anchorage"
+  },
+  "33": {
+    "type": "anchorage"
+  },
+  "30": {
+    "type": "anchorage"
+  },
+  "43": {
+    "type": "anchorage"
+  },
+  "44": {
+    "type": "anchorage"
+  },
+  "32": {
+    "type": "anchorage"
+  },
+  "45": {
+    "type": "anchorage"
+  },
+  "60": {
+    "type": "anchorage"
+  },
+  "31": {
+    "type": "anchorage"
+  },
+  "40": {
+    "type": "anchorage"
+  },
+  "46": {
+    "type": "anchorage"
+  },
+  "48": {
+    "type": "anchorage"
+  },
+  "52": {
+    "type": "anchorage"
+  },
+  "47": {
+    "type": "anchorage"
+  },
+  "64": {
+    "type": "anchorage"
+  },
+  "10": {
+    "type": "tss",
+    "direction": 285.0
+  },
+  "11": {
+    "type": "tss",
+    "direction": 281.0
+  },
+  "12": {
+    "type": "tss",
+    "direction": 315.0
+  },
+  "13": {
+    "type": "tss",
+    "direction": 315.0
+  },
+  "1": {
+    "type": "tss",
+    "direction": 129.0
+  },
+  "2": {
+    "type": "tss",
+    "direction": 118.0
+  },
+  "3": {
+    "type": "tss",
+    "direction": 118.0
+  },
+  "5": {
+    "type": "tss",
+    "direction": 59.0
+  },
+  "6": {
+    "type": "tss",
+    "direction": 50.0
+  },
+  "8": {
+    "type": "tss",
+    "direction": 59.0
+  },
+  "20": {
+    "type": "tss",
+    "direction": 65.0
+  },
+  "54": {
+    "type": "tss",
+    "direction": 65.0
+  },
+  "15": {
+    "type": "tss",
+    "direction": 65.0
+  },
+  "16": {
+    "type": "tss",
+    "direction": 82.0
+  },
+  "17": {
+    "type": "tss",
+    "direction": 82.0
+  },
+  "19": {
+    "type": "tss",
+    "direction": 250.0
+  },
+  "18": {
+    "type": "tss",
+    "direction": 246.0
+  },
+  "22": {
+    "type": "tss",
+    "direction": 246.0
+  },
+  "14": {
+    "type": "tss",
+    "direction": 246.0
+  },
+  "61": {
+    "type": "anchorage"
+  },
+  "63": {
+    "type": "anchorage"
+  },
+  "62": {
+    "type": "anchorage"
+  }
+}

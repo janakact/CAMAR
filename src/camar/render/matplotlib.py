@@ -132,6 +132,36 @@ class MPLVisualizer:
         # Set equal aspect ratio to prevent different scaling
         self.ax.set_aspect("equal")
 
+        # Render static zone polygons (anchorages and TSS lanes) as background
+        if hasattr(self.env.map_generator, "zones"):
+            import math
+            from matplotlib.patches import Polygon as MPLPolygon
+            for zone in self.env.map_generator.zones:
+                verts = np.array([(x, -y) for x, y in zone["polygon"]])
+                if zone["type"] == "anchorage":
+                    facecolor, edgecolor = "#B0D4E8", "#4488AA"
+                else:
+                    facecolor, edgecolor = "#C8E8C0", "#337733"
+                patch = MPLPolygon(
+                    verts, closed=True, facecolor=facecolor, edgecolor=edgecolor,
+                    alpha=0.35, linewidth=0.5, zorder=0,
+                )
+                self.ax.add_patch(patch)
+                if zone["type"] == "tss" and zone.get("direction") is not None:
+                    cx, cy = zone["centroid"]
+                    brg = math.radians(zone["direction"])
+                    dx = math.sin(brg)
+                    dy = math.cos(brg)  # positive = north in geographic coords
+                    al = zone["arrow_len"]
+                    # matplotlib inverts y, so north (dy positive) stays up
+                    self.ax.annotate(
+                        "",
+                        xy=(cx + dx * al, -(cy - dy * al)),
+                        xytext=(cx, -cy),
+                        arrowprops=dict(arrowstyle="->", color="#337733", lw=1.5),
+                        zorder=1,
+                    )
+
         # Initialize artist collections
         self.artists = {"landmarks": [], "goals": [], "agents": [], "connections": []}
 

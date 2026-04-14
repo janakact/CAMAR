@@ -36,6 +36,10 @@ movingai = [
 matplotlib = [
     "matplotlib>=3.10.1",
 ]
+enc = [
+    "geopandas>=0.14.0",
+    "shapely>=2.0.0",
+]
 torchrl = [
     "torchrl>=0.7.0",
 ]

@@ -337,12 +337,68 @@ class SVGVisualizer:
             "</defs>"
         )
 
+    def _render_zones(self) -> str:
+        """Render maritime zone polygons (anchorages and TSS lanes) as a background layer."""
+        if not hasattr(self.env.map_generator, "zones"):
+            return ""
+
+        zones = self.env.map_generator.zones
+        if not zones:
+            return ""
+
+        parts = []
+
+        # Arrowhead marker for TSS direction
+        parts.append(
+            '<defs>'
+            '<marker id="tss-arrow" markerWidth="6" markerHeight="6" '
+            'refX="5" refY="3" orient="auto" markerUnits="strokeWidth">'
+            '<path d="M0,0 L6,3 L0,6 Z" fill="#337733"/>'
+            '</marker>'
+            '</defs>'
+        )
+
+        for zone in zones:
+            pts = " ".join(
+                f"{x / self.scale:.3f},{y / self.scale:.3f}"
+                for x, y in zone["polygon"]
+            )
+            if zone["type"] == "anchorage":
+                parts.append(
+                    f'<polygon points="{pts}" fill="#B0D4E8" fill-opacity="0.35" '
+                    f'stroke="#4488AA" stroke-width="0.3"/>'
+                )
+            elif zone["type"] == "tss":
+                parts.append(
+                    f'<polygon points="{pts}" fill="#C8E8C0" fill-opacity="0.35" '
+                    f'stroke="#337733" stroke-width="0.3"/>'
+                )
+                # Direction arrow at centroid
+                if zone.get("direction") is not None:
+                    bearing_rad = math.radians(zone["direction"])
+                    dx = math.sin(bearing_rad)
+                    dy = -math.cos(bearing_rad)  # north = negative y in SVG
+                    cx, cy = zone["centroid"]
+                    al = zone["arrow_len"]
+                    x1 = cx / self.scale
+                    y1 = cy / self.scale
+                    x2 = (cx + dx * al) / self.scale
+                    y2 = (cy + dy * al) / self.scale
+                    parts.append(
+                        f'<line x1="{x1:.3f}" y1="{y1:.3f}" x2="{x2:.3f}" y2="{y2:.3f}" '
+                        f'stroke="#337733" stroke-width="0.8" '
+                        f'marker-end="url(#tss-arrow)"/>'
+                    )
+
+        return "\n".join(parts)
+
     def render(self) -> str:
         """Render the complete SVG."""
         header = self._create_svg_header()
         styles = self._create_styles()
 
-        # Render all object types
+        # Render zones as background layer, then obstacles, goals, agents
+        zones_svg = self._render_zones()
         landmarks_svg = self._render_animated_objects("landmarks")
         goals_svg = self._render_animated_objects("goals")
         agents_svg = self._render_animated_objects("agents")
@@ -351,6 +407,8 @@ class SVGVisualizer:
         parts = [
             header,
             styles,
+            "\n",
+            zones_svg,
             "\n",
             landmarks_svg,
             "\n",
