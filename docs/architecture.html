@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CAMAR Architecture</title>
+<style>
+  body { background: #12121E; color: #ECF0F1; font-family: sans-serif; margin: 0; padding: 20px; }
+  h1   { text-align: center; font-size: 1.5rem; color: #ECF0F1; margin-bottom: 4px; }
+  p    { text-align: center; color: #7F8C8D; font-size: 0.9rem; margin-top: 0; }
+  .mermaid { display: flex; justify-content: center; }
+  /* Make mermaid use a dark theme */
+  .mermaid svg { background: #12121E !important; }
+</style>
+</head>
+<body>
+<h1>CAMAR Maritime Simulator — Data Flow</h1>
+<p>AIS data pipeline &nbsp;·&nbsp; ENC shapefiles &nbsp;·&nbsp; Dynamics &nbsp;·&nbsp; CAMAR environment &nbsp;·&nbsp; AIS replay policy &nbsp;·&nbsp; SVG rendering</p>
+
+<div class="mermaid">
+%%{init: {'theme': 'dark', 'themeVariables': {'background': '#12121E', 'primaryColor': '#2E6DA4', 'edgeLabelBackground': '#1A1A2E'}}}%%
+flowchart TD
+    %% =====================================================================
+    %% AIS DATA PIPELINE
+    %% =====================================================================
+    subgraph AIS["① AIS Data Pipeline  ·  camar.ais"]
+        direction TB
+        A1[/"AIS Parquet Files\ncombined_data_260219.parquet"/]:::file
+        A2["load_ais_parquet()\nbbox · time_range · mmsi_filter"]:::data
+        A3[("DataFrame\nlons · lats · speed · course · heading")]:::store
+        A4["extract_trajectories()\nsplit on Δt gap · min_points filter"]:::data
+        A5[("List[AISTrajectory]  raw\nirregular Δt · per-vessel t₀")]:::store
+        A6["align_trajectories_to_window()\nslide window_s · find peak overlap\nresample all to shared t_grid"]:::data
+        A7[("List[AISTrajectory]  aligned\nsame timestamps · speed=0 outside range")]:::store
+
+        A1 --> A2 --> A3 --> A4 --> A5 --> A6 --> A7
+    end
+
+    %% =====================================================================
+    %% ENC SHAPEFILES
+    %% =====================================================================
+    subgraph ENC["② ENC Map  ·  camar.maps.enc_map"]
+        direction TB
+        E1[/"landPolygons.shp\nzones.shp  ·  labels.json"/]:::file
+        E2(["ENCProjection\nlon/lat ↔ km  equirectangular\ncos-lat scaled x,  y = lat_c − lat"]):::enc
+        E3["enc_map.__init__()\nsample coastline → landmark circles\nbuild free-water grid\nload anchorage & TSS zones"]:::enc
+        E4[("enc_map instance\nlandmark_pos  ·  free_pos_jax\nzones  ·  agent/goal_rad")]:::store
+
+        E1 --> E2
+        E1 --> E3
+        E2 --> E3
+        E3 --> E4
+    end
+
+    %% =====================================================================
+    %% DYNAMICS
+    %% =====================================================================
+    subgraph DYN["③ Dynamics  ·  camar.dynamics"]
+        direction TB
+        D1["DeltaPosDynamic\nmax_speed · dt · max_angle_delta\naction_size = 3"]:::dyn
+        D2[("DeltaPosState\nagent_pos  N×2\nagent_angle  N  radians")]:::store
+        D1 -. "state_class" .-> D2
+    end
+
+    %% =====================================================================
+    %% CAMAR ENVIRONMENT
+    %% =====================================================================
+    subgraph ENV["④ CAMAR Environment  ·  camar.environment"]
+        direction TB
+        V1["camar_v0(map, dynamic)\nmake_env() factory"]:::env
+        V2(["Camar\nnum_agents · height · width\nstep_dt · observation_size"]):::env
+        V3["reset(key)\nmap.reset() → positions\ncreate DeltaPosState + State"]:::env
+        V4["step(key, state, actions)\ndynamic.integrate()\ncollision forces + observations"]:::env
+        V5[("State\nphysical_state  ·  landmark_pos\ngoal_pos  ·  step  ·  on_goal")]:::store
+
+        V1 --> V2
+        V2 --> V3
+        V2 --> V4
+        V3 --> V5
+        V4 --> V5
+    end
+
+    %% =====================================================================
+    %% AIS REPLAY POLICY
+    %% =====================================================================
+    subgraph POL["⑤ AIS Replay Policy  ·  camar.ais.policy"]
+        direction TB
+        P1["AISReplayPolicy(\n  trajs, projection\n  max_speed, max_angle_delta\n)"]:::policy
+        P2["project lon/lat → km\nΔpos per step  ÷ max_speed\nΔheading per step  ÷ max_angle_delta\nwrap to ±π · clip to ±1"]:::policy
+        P3[("_actions\n(n_steps, N, 3)  clipped ±1")]:::store
+        P4(["initial_positions()  ·  goal_positions()\ninitial_angles()  ·  t_grid"]):::policy
+
+        P1 --> P2
+        P2 --> P3
+        P2 --> P4
+    end
+
+    %% =====================================================================
+    %% SIMULATION LOOP
+    %% =====================================================================
+    subgraph SIM["⑥ Simulation Loop  ·  run_ais_replay.py"]
+        direction TB
+        S1["env.reset(key)"]:::sim
+        S2["state.agent_angle\n← policy.initial_angles()"]:::sim
+        S3{"for t = 0 … n_steps"}:::sim
+        S4["actions = policy(obs, state)\n_actions[state.step]  →  N×3"]:::sim
+        S5["obs, state, reward, done\n= env.step(key, state, actions)"]:::sim
+        S6[("state_seq\n[ State₀  …  StateN ]")]:::store
+
+        S1 --> S2 --> S3
+        S3 -- "each step" --> S4 --> S5 --> S3
+        S5 -- "append" --> S6
+    end
+
+    %% =====================================================================
+    %% RENDERING
+    %% =====================================================================
+    subgraph REN["⑦ SVG Rendering  ·  camar.render.svg"]
+        direction TB
+        R1["SVGVisualizer(\n  env, state_seq, fps, t_grid\n)"]:::render
+        R2["_render_zones()\nanchorage & TSS polygons + arrows"]:::render
+        R3["_render_animated_objects()\nlandmarks & goals  →  circle + animate"]:::render
+        R4["_render_animated_agents_with_heading()\nanimateTransform translate + rotate"]:::render
+        R5["_render_timestamp_overlay()\nanimate calcMode=discrete  UTC clock"]:::render
+        R6[/"images/ais_replay.svg\nanimated SVG  ·  300 vessels  ·  721 frames"/]:::file
+
+        R1 --> R2 --> R3 --> R4 --> R5 --> R6
+    end
+
+    %% =====================================================================
+    %% CROSS-SECTION CONNECTIONS
+    %% =====================================================================
+    A7 -- "aligned trajs" --> P1
+    E2 -- "projection" --> P1
+    P4 -- "set_fixed_positions\n(starts, goals)" --> E4
+    E4 -- "map" --> V1
+    D1 -- "dynamic" --> V1
+    V3 -- "obs, State" --> S1
+    V4 -- "obs, State" --> S5
+    P3 -- "step actions" --> S4
+    P4 -- "initial_angles" --> S2
+    S6 -- "state_seq" --> R1
+    P4 -- "t_grid" --> R5
+    E4 -- "zones" --> R2
+
+    %% =====================================================================
+    %% STYLES
+    %% =====================================================================
+    classDef file    fill:#5D6D7E,stroke:#BDC3C7,color:#fff
+    classDef data    fill:#2E6DA4,stroke:#AED6F1,color:#fff
+    classDef store   fill:#1A252F,stroke:#7F8C8D,color:#ECF0F1,font-style:italic
+    classDef enc     fill:#1E8449,stroke:#82E0AA,color:#fff
+    classDef dyn     fill:#B7770D,stroke:#F9E79F,color:#fff
+    classDef env     fill:#6C3483,stroke:#D7BDE2,color:#fff
+    classDef policy  fill:#A93226,stroke:#F1948A,color:#fff
+    classDef sim     fill:#1A3657,stroke:#85C1E9,color:#fff
+    classDef render  fill:#0E6655,stroke:#76D7C4,color:#fff
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    flowchart: { curve: 'basis', padding: 20 },
+    themeVariables: {
+      background: '#12121E',
+      primaryColor: '#2E6DA4',
+      primaryTextColor: '#ECF0F1',
+      lineColor: '#7F8C8D',
+      edgeLabelBackground: '#1A1A2E',
+      clusterBkg: '#1E1E30',
+      clusterBorder: '#444'
+    }
+  });
+</script>
+</body>
+</html>

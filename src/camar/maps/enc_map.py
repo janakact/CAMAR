@@ -332,9 +332,41 @@ class enc_map(base_map):
     def width(self) -> float:
         return self._width
 
+    def set_fixed_positions(
+        self,
+        agent_pos: "np.ndarray",
+        goal_pos: "np.ndarray",
+    ) -> None:
+        """Pin agent start and goal positions for the next reset() call.
+
+        When set, ``reset()`` uses these positions instead of sampling from the
+        free-water grid.  Useful for AIS replay where agents should start at
+        the first point of their trajectory and have goals at the last point.
+
+        Positions are in the simulator's km coordinate system (as returned by
+        :meth:`ENCProjection.forward`).  They may lie outside the map bbox —
+        e.g. a vessel that starts outside the monitored area.
+
+        Parameters
+        ----------
+        agent_pos:
+            ``(num_agents, 2)`` array of starting positions in km.
+        goal_pos:
+            ``(num_agents, 2)`` array of goal positions in km.
+        """
+        import numpy as _np
+        self._fixed_agent_pos = jnp.array(_np.asarray(agent_pos), dtype=jnp.float32, device=ENV_DEVICE)
+        self._fixed_goal_pos = jnp.array(_np.asarray(goal_pos), dtype=jnp.float32, device=ENV_DEVICE)
+
     def reset(self, key: ArrayLike) -> tuple[Array, Array, Array, Array]:
         key, key_a, key_g = jax.random.split(key, 3)
-        agent_pos = jax.random.choice(key_a, self._free_pos_jax, shape=(self.num_agents,), replace=False)
-        goal_pos = jax.random.choice(key_g, self._free_pos_jax, shape=(self.num_agents,), replace=False)
+
+        if hasattr(self, "_fixed_agent_pos"):
+            agent_pos = self._fixed_agent_pos
+            goal_pos = self._fixed_goal_pos
+        else:
+            agent_pos = jax.random.choice(key_a, self._free_pos_jax, shape=(self.num_agents,), replace=False)
+            goal_pos = jax.random.choice(key_g, self._free_pos_jax, shape=(self.num_agents,), replace=False)
+
         sizes = self.generate_sizes(key)
         return key_g, self._landmark_pos_jax, agent_pos, goal_pos, sizes

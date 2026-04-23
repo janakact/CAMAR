@@ -4,7 +4,7 @@ from typing import List, Optional, Tuple
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import Circle, ConnectionPatch
+from matplotlib.patches import Circle, ConnectionPatch, FancyArrow
 
 from .const import COLORS, LANDMARK_COLOR
 
@@ -199,15 +199,20 @@ class MPLVisualizer:
             self.ax.add_patch(circle)
             self.artists["goals"].append(circle)
 
-        # Create agents
+        # Create agents — arrows if heading data present, otherwise circles
         config = self.render_configs["agents"]
         positions = self._get_positions(state, "agents")
+        has_heading = hasattr(state.physical_state, "agent_angle")
+        angles = state.physical_state.agent_angle.tolist() if has_heading else None
         for i, (x, y) in enumerate(positions):
             radius = self._get_radius(state, "agents", i)
             color = self._get_color(config, i)
-            circle = Circle((x, -y), radius, color=color, alpha=config.alpha)  # invert Y
-            self.ax.add_patch(circle)
-            self.artists["agents"].append(circle)
+            if has_heading:
+                patch = self._make_arrow_patch(x, -y, angles[i], radius, color, config.alpha)
+            else:
+                patch = Circle((x, -y), radius, color=color, alpha=config.alpha)
+            self.ax.add_patch(patch)
+            self.artists["agents"].append(patch)
 
         # Create connections if enabled
         if config.show_connections:
@@ -230,15 +235,52 @@ class MPLVisualizer:
                 self.ax.add_patch(connection)
                 self.artists["connections"].append(connection)
 
+    @staticmethod
+    def _make_arrow_patch(px, py, angle_rad, radius, color, alpha):
+        """Create a FancyArrow pointing in the heading direction.
+
+        Parameters match matplotlib plot space (y already inverted by caller).
+        Heading 0 = north = +y direction in plot space.
+        """
+        dx = np.sin(angle_rad) * radius   # east component
+        dy = np.cos(angle_rad) * radius   # north component (plot y = up)
+        tail_x = px - dx * 0.5
+        tail_y = py - dy * 0.5
+        return FancyArrow(
+            tail_x, tail_y, dx, dy,
+            width=radius * 0.35,
+            head_width=radius,
+            head_length=radius * 0.45,
+            length_includes_head=True,
+            color=color,
+            alpha=alpha,
+        )
+
     def _update_artists(self, state):
         """Update artist positions for a new state."""
         # Update agent positions
         agent_positions = self._get_positions(state, "agents")
-        for i, circle in enumerate(self.artists["agents"]):
-            if i < len(agent_positions):
-                # Invert Y coordinate for agent positions
-                agent_pos = agent_positions[i]
-                circle.center = (agent_pos[0], -agent_pos[1])
+        has_heading = hasattr(state.physical_state, "agent_angle")
+
+        if has_heading:
+            # Recreate arrow patches (heading changes each frame)
+            angles = state.physical_state.agent_angle.tolist()
+            config = self.render_configs["agents"]
+            for patch in self.artists["agents"]:
+                patch.remove()
+            self.artists["agents"].clear()
+            for i, (x, y) in enumerate(agent_positions):
+                radius = self._get_radius(state, "agents", i)
+                color = self._get_color(config, i)
+                patch = self._make_arrow_patch(x, -y, angles[i], radius, color, config.alpha)
+                self.ax.add_patch(patch)
+                self.artists["agents"].append(patch)
+        else:
+            for i, circle in enumerate(self.artists["agents"]):
+                if i < len(agent_positions):
+                    # Invert Y coordinate for agent positions
+                    agent_pos = agent_positions[i]
+                    circle.center = (agent_pos[0], -agent_pos[1])
 
         # Update connection positions
         if self.artists["connections"]:

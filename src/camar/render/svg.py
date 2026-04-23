@@ -133,11 +133,13 @@ class SVGVisualizer:
         color_step: Optional[int] = None,
         use_all_colors: bool = False,
         agent_transparency: float = 0.8,
+        t_grid: Optional[List[float]] = None,
     ):
         self.env = env
         self.state_seq = state_seq
         self.use_all_colors = use_all_colors
         self.agent_transparency = agent_transparency
+        self.t_grid = t_grid  # Unix-second timestamps per step (for on-screen clock)
 
         # Determine if we should animate
         should_animate = isinstance(state_seq, list) and len(state_seq) > 1
@@ -228,6 +230,56 @@ class SVGVisualizer:
             return self.env.map_generator.agent_rad
         else:
             raise ValueError(f"Unknown data type: {data_type}")
+
+    def _render_animated_agents_with_heading(self) -> str:
+        """Render agents as animated arrows using per-frame heading data."""
+        config = self.render_configs["agents"]
+        r = self._get_homogeneous_radius("agents") / self.scale
+
+        # Arrow points (tip up = north, centered at origin)
+        tip_y   = -r
+        base_y  =  r * 0.5
+        base_hw =  r * 0.33
+        pts = f"0,{tip_y:.3f} {-base_hw:.3f},{base_y:.3f} {base_hw:.3f},{base_y:.3f}"
+
+        # Collect per-agent position and angle sequences
+        n_agents = len(self.state_seq[0].physical_state.agent_pos)
+        pos_seq = [[] for _ in range(n_agents)]
+        ang_seq = [[] for _ in range(n_agents)]
+
+        for state in self.state_seq:
+            positions = state.physical_state.agent_pos.tolist()
+            angles = state.physical_state.agent_angle.tolist()
+            for i in range(n_agents):
+                pos_seq[i].append(positions[i])
+                ang_seq[i].append(angles[i])
+
+        svg_parts = []
+        for i in range(n_agents):
+            color = self.renderer._get_color(config, i, self.use_all_colors, self.color_step)
+
+            tx_vals = ";".join(
+                f"{x / self.scale:.3f},{y / self.scale:.3f}"
+                for x, y in pos_seq[i]
+            )
+            rot_vals = ";".join(
+                f"{math.degrees(a):.3f}"
+                for a in ang_seq[i]
+            )
+
+            svg_parts.append(
+                f'<g>'
+                f'<animateTransform attributeName="transform" type="translate" '
+                f'values="{tx_vals}" dur="{self.duration}s" '
+                f'keyTimes="{self.keytimes}" repeatCount="indefinite"/>'
+                f'<animateTransform attributeName="transform" type="rotate" '
+                f'values="{rot_vals}" dur="{self.duration}s" '
+                f'keyTimes="{self.keytimes}" repeatCount="indefinite" additive="sum"/>'
+                f'<polygon points="{pts}" fill="{color}" opacity="{self.agent_transparency}"/>'
+                f'</g>'
+            )
+
+        return "\n".join(svg_parts)
 
     def _render_animated_objects(self, data_type: str) -> str:
         """Render animated objects of a specific type."""
@@ -392,6 +444,58 @@ class SVGVisualizer:
 
         return "\n".join(parts)
 
+    def _agents_have_heading(self) -> bool:
+        """Return True if the first state carries heading data."""
+        state = self.state_seq[0] if isinstance(self.state_seq, list) else self.state_seq
+        return hasattr(state.physical_state, "agent_angle")
+
+    def _render_timestamp_overlay(self) -> str:
+        """Render an animated clock in the top-left corner of the map.
+
+        Uses ``<animate calcMode="discrete">`` on ``textContent`` which is
+        supported in all modern browsers.  Falls back to showing the step
+        index if no ``t_grid`` was supplied.
+        """
+        if not isinstance(self.state_seq, list) or len(self.state_seq) <= 1:
+            return ""
+
+        import datetime
+
+        # Top-left corner in SVG coords
+        margin = 4.0  # px in SVG space
+        tx = -self.width / 2 / self.scale + margin
+        ty = -self.height / 2 / self.scale + margin * 2.5
+        font_size = max(5.0, self.scale * 2.5)
+
+        n = len(self.state_seq)
+        if self.t_grid is not None and len(self.t_grid) >= n:
+            labels = [
+                datetime.datetime.utcfromtimestamp(float(self.t_grid[i])).strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
+                )
+                for i in range(n)
+            ]
+            first_label = labels[0]
+        else:
+            labels = [f"step {i}" for i in range(n)]
+            first_label = labels[0]
+
+        values_str = ";".join(labels)
+
+        return (
+            f'<text x="{tx:.3f}" y="{ty:.3f}" '
+            f'font-size="{font_size:.2f}" fill="white" '
+            f'font-family="monospace" '
+            f'style="text-shadow: 0 0 3px #000; paint-order: stroke; '
+            f'stroke: #000; stroke-width: 1px;">'
+            f'{first_label}'
+            f'<animate attributeName="textContent" calcMode="discrete" '
+            f'values="{values_str}" '
+            f'dur="{self.duration}s" keyTimes="{self.keytimes}" '
+            f'repeatCount="indefinite"/>'
+            f'</text>'
+        )
+
     def render(self) -> str:
         """Render the complete SVG."""
         header = self._create_svg_header()
@@ -401,7 +505,13 @@ class SVGVisualizer:
         zones_svg = self._render_zones()
         landmarks_svg = self._render_animated_objects("landmarks")
         goals_svg = self._render_animated_objects("goals")
-        agents_svg = self._render_animated_objects("agents")
+
+        if self.animate_agents and self._agents_have_heading():
+            agents_svg = self._render_animated_agents_with_heading()
+        else:
+            agents_svg = self._render_animated_objects("agents")
+
+        timestamp_svg = self._render_timestamp_overlay()
 
         # Combine all parts
         parts = [
@@ -415,6 +525,8 @@ class SVGVisualizer:
             goals_svg,
             "\n",
             agents_svg,
+            "\n",
+            timestamp_svg,
             "</svg>",
         ]
 

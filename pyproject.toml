@@ -40,6 +40,10 @@ enc = [
     "geopandas>=0.14.0",
     "shapely>=2.0.0",
 ]
+ais = [
+    "pandas>=1.4.0",
+    "scipy>=1.9.0",
+]
 torchrl = [
     "torchrl>=0.7.0",
 ]
