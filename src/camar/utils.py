@@ -34,6 +34,8 @@ class Box:
 @struct.dataclass
 class State:
     physical_state: PhysicalState
+    # history of the physical state - for maritime we need to store the history of the agent's position and angle
+    hist_state: ArrayLike  # [num_agents, hist_len + 1, features_per_agent]; [0]=current, [1:]=history — [x, y, angle, vx, vy]
 
     landmark_pos: ArrayLike  # [num_landmarks, 2]
 

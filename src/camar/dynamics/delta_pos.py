@@ -20,9 +20,10 @@ class DeltaPosState(PhysicalState):
         landmark_pos: ArrayLike,
         agent_pos: ArrayLike,
         goal_pos: ArrayLike,
+        agent_angle: ArrayLike,
         sizes: "Sizes",  # noqa: F821
     ) -> "DeltaPosState":
-        return cls(agent_pos=agent_pos, agent_angle=jnp.zeros(agent_pos.shape[0]))
+        return cls(agent_pos=agent_pos, agent_angle=agent_angle)
 
 
 @register_dynamic("DeltaPosDynamic")

@@ -19,6 +19,7 @@ class Camar:
         max_steps: int = 100,
         frameskip: int = 1,
         max_obs: int = 3,
+        hist_len: int = 2,
         pos_shaping_factor: float = 0.0,
         contact_force: float = 500,
         contact_margin: float = 0.001,
@@ -62,6 +63,10 @@ class Camar:
             map_generator.update_goals if lifelong else lambda keys, goal_pos, to_update: (keys, goal_pos)
         )
 
+        self.hist_len = hist_len
+        self.features_per_agent = 5 # x, y, angle, vx, vy
+        self.padded_value = jnp.zeros(self.features_per_agent)
+
     @property
     def homogeneous_agents(self) -> bool:
         return self.map_generator.homogeneous_agents
@@ -102,16 +107,25 @@ class Camar:
     def observation_size(self) -> int:
         return self.max_obs * 2 + 2
 
-    def reset(self, key: ArrayLike) -> tuple[Array, State]:
+    def reset(self, key: ArrayLike, init_angles: ArrayLike) -> tuple[Array, State]:
         goal_keys, landmark_pos, agent_pos, goal_pos, sizes = self.map_reset(key)
 
         goal_dist = jnp.linalg.norm(agent_pos - goal_pos, axis=-1)
         on_goal = goal_dist < (self.map_generator.goal_rad if self.homogeneous_goals else sizes.goal_rad)
 
-        physical_state = self.dynamic.state_class.create(key, landmark_pos, agent_pos, goal_pos, sizes)
-
+        physical_state = self.dynamic.state_class.create(key, landmark_pos, agent_pos, goal_pos, init_angles, sizes)
+        hist_pad = jnp.full(
+            (self.num_agents, self.hist_len, self.features_per_agent), self.padded_value
+        )
+        angles_col = jnp.reshape(jnp.asarray(init_angles), (self.num_agents, 1))
+        cur_state = jnp.concatenate(
+            (agent_pos, angles_col, jnp.zeros((self.num_agents, 2))), axis=-1
+        )
+        # [0] = current (x, y, θ, vx, vy); [1:] = padded older slots
+        hist_state = jnp.concatenate((cur_state[:, None, :], hist_pad), axis=-2)        
         state = State(
             physical_state=physical_state,
+            hist_state=hist_state,
             landmark_pos=landmark_pos,
             goal_pos=goal_pos,
             sizes=sizes,
@@ -123,7 +137,7 @@ class Camar:
             goal_keys=goal_keys,
         )
 
-        obs = self.get_obs(state)
+        obs = self.get_obs_maritime(state)
 
         return obs, state
 
@@ -183,9 +197,16 @@ class Camar:
         current_time = (state.step + 1) * self.step_dt
         time_to_reach_goal = jnp.where(just_arrived, current_time, state.time_to_reach_goal)
         num_collisions = state.num_collisions + is_collision.astype(jnp.int32)
-
+        
+        angles_col = jnp.reshape(jnp.asarray(physical_state.agent_angle), (self.num_agents, 1))
+        cur_state = jnp.concatenate(
+            (physical_state.agent_pos, angles_col, actions[:, :2] * self.dynamic.max_speed/self.dt), axis=-1
+        )
+        hist_state = jnp.concatenate((cur_state[:, None, :], state.hist_state[:, :-1, :]), axis=-2)
+                        
         new_state = state.replace(
             physical_state=physical_state,
+            hist_state=hist_state,
             goal_pos=goal_pos,
             sizes=sizes,
             is_collision=is_collision,
@@ -196,11 +217,37 @@ class Camar:
             goal_keys=goal_keys,
         )
 
-        obs = self.get_obs(new_state)
+        obs = self.get_obs_maritime(new_state)
         reward = self.get_reward(state, actions, new_state)
 
         return obs, new_state, reward, done, {}
 
+    def get_obs_maritime(self, state: State) -> dict:
+        agent_pos = state.physical_state.agent_pos  # (num_agents, 2)
+        goal_pos = state.goal_pos                   # (num_agents, 2)
+        hist_state = state.hist_state               # (num_agents, hist_len+1, 5)
+
+        # ego: own history — (num_agents, hist_len+1, 5)
+        ego = hist_state
+
+        # goal: ego-centric relative goal vector — (num_agents, 2)
+        goal = goal_pos - agent_pos
+
+        # neighbors: find max_obs nearest agents (agents only, self excluded)
+        # pairwise distances between current positions — (num_agents, num_agents)
+        diff = agent_pos[:, None, :] - agent_pos[None, :, :]  # (num_agents, num_agents, 2)
+        dists = jnp.linalg.norm(diff, axis=-1)                # (num_agents, num_agents)
+        # mask self by inflating its distance
+        dists = dists + jnp.eye(self.num_agents) * 1e9
+
+        # top-k nearest agent indices — (num_agents, max_obs)
+        _, neighbor_ids = jax.lax.top_k(-dists, self.max_obs)
+
+        # gather neighbor histories — (num_agents, max_obs, hist_len+1, 5)
+        neighbors = hist_state[neighbor_ids]
+
+        return {"ego": ego, "neighbors": neighbors, "goal": goal}
+    
     def get_obs(self, state: State) -> Array:
         agent_pos = state.physical_state.agent_pos
         landmark_pos = state.landmark_pos

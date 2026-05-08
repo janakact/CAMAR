@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from tqdm import tqdm
 
 # ---------------------------------------------------------------------------
 # make sure the package is importable when running from the repo root
@@ -49,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--data",
         nargs="+",
-        default=["data/combined_data_260219.parquet"],
+        default=["/DATA1/shared/datasets/Maritime-2026/compressed/combined_data_260219.parquet"],
         metavar="PATH",
         help="One or more AIS parquet files.",
     )
@@ -306,7 +307,7 @@ def main() -> None:
         dt=args.interval,
         max_angle_delta=args.max_angle_delta,
     )
-    env = camar_v0(m, dynamic=dynamic, frameskip=0)
+    env = camar_v0(m, dynamic=dynamic, frameskip=0, max_steps=721, max_obs=10, hist_len=10)
     print(f"  step_dt={env.step_dt}s  obs_size={env.observation_size}")
 
     # ------------------------------------------------------------------
@@ -332,23 +333,26 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 7. Run simulation
     # ------------------------------------------------------------------
-    key = jax.random.key(args.seed)
-    obs, state = env.reset(key)
-
-    # Apply initial headings from AIS data (env.reset initialises to 0)
     init_angles = jnp.array(policy.initial_angles(), dtype=jnp.float32)
-    state = state.replace(physical_state=state.physical_state.replace(agent_angle=init_angles))
+    key = jax.random.key(args.seed)
+    obs, state = env.reset(key, init_angles)    
+    step_fn = jax.jit(env.step)
+    # Apply initial headings from AIS data (env.reset initialises to 0)    
+    # state = state.replace(physical_state=state.physical_state.replace(agent_angle=init_angles))
 
     state_seq = [state]
-    for step_i in range(n_steps):
+    # for step_i in tqdm(range(n_steps)):
+    #     actions = policy(obs, state)
+    #     obs, state, _rew, _done, _ = env.step(key, state, actions)                        
+    #     state_seq.append(state)
+    #     if (step_i + 1) % 50 == 0:
+    #         print(f"  step {step_i + 1}/{n_steps}")
+    for step_i in tqdm(range(n_steps)):
         actions = policy(obs, state)
-        obs, state, _rew, _done, _ = env.step(key, state, actions)
-        state_seq.append(state)
-        if (step_i + 1) % 50 == 0:
-            print(f"  step {step_i + 1}/{n_steps}")
+        obs, state, _rew, _done, _ = step_fn(key, state, actions)                        
+        state_seq.append(state)        
 
-    print(f"Simulation complete. Collected {len(state_seq)} frames.")
-
+    print(f"Simulation complete. Collected {len(state_seq)} frames.")    
     # ------------------------------------------------------------------
     # 8. Save animated SVG
     # ------------------------------------------------------------------
