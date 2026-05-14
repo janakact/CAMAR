@@ -183,3 +183,5 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 data
+images/ais_replay_300.svg
+images/ais_replay_300_v2.svg
