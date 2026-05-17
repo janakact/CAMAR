@@ -3,7 +3,188 @@
 This document describes the transition-dynamics layer of CAMAR: the abstraction that
 maps `(state, action) → next_state` for every agent each simulation step. It covers
 the existing dynamics, the proposed `inverse(state, next_state) → action` extension,
-and the planned **sea-current** field that some dynamics will couple to.
+the planned **sea-current** field that some dynamics will couple to, and the
+short-list of new ship-specific dynamics we plan to implement.
+
+---
+
+## 0. Ship-dynamics short-list (plain-text overview)
+
+The historical data available is position (x and y), heading (where the bow
+points), and velocity components in the world frame (vx and vy). From these we
+can derive forward speed, course over ground, yaw rate, and a drift angle, but
+we cannot directly observe rudder angle, propeller revolutions, or sea currents.
+
+For every dynamic listed below, replay works the same way: AIS samples are
+turned into actions through an inverse-dynamics step, then those actions are
+fed back through the forward dynamic to integrate the state. The action space
+exists in every case — there is no "passive" mode.
+
+The short-list is split into models that **set kinematics directly each step**
+(no inertia) and models that **respect inertia** (slow to accelerate, slow to
+turn). Real ships behave like the second group.
+
+### 0.1 No-inertia kinematic models (already in CAMAR or trivial to add)
+
+Useful as baselines, for replay-only traffic, and for very large fleets where
+physical fidelity is sacrificed for speed.
+
+#### Constant Turn-Rate and Velocity (CTRV)
+- **State per ship.** Position, heading, forward speed, turn rate.
+- **Action space.** Two numbers per ship: a commanded forward speed and a
+  commanded turn rate. Both replace the corresponding state directly each step.
+- **Inertia.** None. Speed and turn rate snap to the commanded values.
+- **Suitable for our data?** Yes for replay only — every state component reads
+  straight from AIS with at most one finite difference.
+- **Reference.**
+  - Tam, Bucknall & Greig (2009), *A Simplified Simulation Model of Ship
+    Navigation for Safety and Collision Avoidance in Heavy Traffic Areas*,
+    Journal of Navigation.
+    <https://www.cambridge.org/core/journals/journal-of-navigation/article/abs/simplified-simulation-model-of-ship-navigation-for-safety-and-collision-avoidance-in-heavy-traffic-areas/D8671045BDAC618F5330FE4E44BB4848>
+
+#### DiffDrive / Unicycle (already implemented as `DiffDriveDynamic`)
+- **State per ship.** Position, world-frame velocity, body heading.
+- **Action space.** Two numbers: commanded forward speed along the body axis,
+  commanded yaw rate. Both are assigned, not integrated.
+- **Inertia.** None on the agent-control side. Only collision force is
+  integrated against the mass.
+- **Suitable for our data?** Yes as a kinematic baseline for ego or controlled
+  agents — same data needs as CTRV.
+- **Reference.**
+  - Cui et al. (2022), *Underactuated USV path-following mechanism based on the
+    cascade method*, Scientific Reports.
+    <https://www.nature.com/articles/s41598-022-05456-9>
+
+#### DeltaPos (already implemented as `DeltaPosDynamic`)
+- **State per ship.** Position, heading.
+- **Action space.** Three numbers: world-frame x displacement, world-frame y
+  displacement, heading change.
+- **Inertia.** None. Position and heading are commanded directly.
+- **Suitable for our data?** Yes for replay (currently used by the AIS replay
+  pipeline). Not realistic for control because the agent can teleport within
+  the step bound.
+
+### 0.2 Inertia-respecting ship dynamics (proposed additions)
+
+#### Nomoto first-order with throttle — recommended primary addition
+- **What it models.** A ship's heading response and forward speed, both with
+  first-order lag. The rudder command does not change heading directly: it
+  changes the yaw rate, and the yaw rate then bends the heading. The throttle
+  command builds forward speed over a separate lag.
+- **State per ship.** Position, heading, yaw rate, forward speed.
+- **Action space.** Two numbers per ship: a rudder command and a throttle
+  command. Negative rudder is port, positive is starboard. Negative throttle is
+  astern, positive is ahead.
+- **Inertia.** Yes — heading is slow to turn, forward speed is slow to change.
+  Two time constants (one for yaw, one for surge) capture "slow to stop, slow
+  to turn".
+- **Suitable for our data?** Yes — the four hyperparameters (gain and time
+  constant for each lag) can be identified from AIS alone: yaw parameters from
+  heading response in turning segments, surge parameters from accel and decel
+  segments. No need to observe rudder or propeller revolutions directly.
+- **References.**
+  - Nomoto, Taguchi, Honda & Hirano (1957), *On the steering qualities of ships*.
+  - Sutulo & Guedes Soares, *Fundamental Properties of Linear Ship Steering
+    Dynamic Models*.
+    <https://www.researchgate.net/publication/265324077_Fundamental_Properties_of_Linear_Ship_Steering_Dynamic_Models>
+  - Autopilot design overview:
+    <https://www.researchgate.net/publication/277497099_Ships_Steering_Autopilot_Design_by_Nomoto_Model>
+
+#### Norrbin with throttle — drop-in upgrade for large slow ships
+- **What it models.** Same as Nomoto first-order, but the yaw damping is a
+  polynomial instead of a single linear term. The polynomial captures the
+  tendency of tankers and bulk carriers to drift off course on their own.
+- **State per ship.** Identical to Nomoto first-order: position, heading, yaw
+  rate, forward speed.
+- **Action space.** Identical to Nomoto first-order: rudder command and
+  throttle command.
+- **Inertia.** Yes — same lags as Nomoto plus nonlinear yaw damping.
+- **Suitable for our data?** Yes — same identification path as Nomoto, with one
+  or two extra polynomial coefficients per ship-type fitted from heading-only
+  observations.
+- **References.**
+  - Norrbin (1963), *On the design and analysis of zig-zag tests*.
+  - Nonlinear course-keeping application:
+    <https://www.mdpi.com/2077-1312/13/3/534>
+  - Course-keeping under disturbance:
+    <https://www.sciencedirect.com/science/article/abs/pii/S0029801821016796>
+
+#### Fossen three-degree-of-freedom — best physics, needs borrowed coefficients
+- **What it models.** A rigid body in the horizontal plane driven by a lumped
+  force and moment vector. Surge, sway and yaw all have inertia and damping;
+  the sideways slip a ship develops in a turn is captured explicitly.
+- **State per ship.** Position, heading, forward speed along the length axis,
+  sway speed across the beam axis, yaw rate.
+- **Action space.** Three numbers per ship: a forward force command, a sideways
+  force command, a turning moment command. For ordinary screw-and-rudder ships
+  the sideways force is held at zero.
+- **Inertia.** Yes — full surge, sway and yaw inertia plus hydrodynamic damping
+  and Coriolis coupling between axes.
+- **Suitable for our data?** Partially. The state can be reconstructed from
+  AIS by decomposing world-frame velocity into body-frame surge and sway, but
+  the mass and damping matrices cannot be identified from AIS alone. They have
+  to be borrowed from published templates such as CyberShip II or KVLCC2.
+- **References.**
+  - Fossen (2021), *Handbook of Marine Craft Hydrodynamics and Motion Control*,
+    2nd ed., Wiley.
+    <https://onlinelibrary.wiley.com/doi/book/10.1002/9781119994138>
+  - Fossen marine craft model page:
+    <https://fossen.biz/html/marineCraftModel.html>
+  - MSS toolbox (companion code):
+    <https://github.com/cybergalactic/MSS>
+  - Skjetne, Smogeli & Fossen (2004), CyberShip II identification:
+    <https://www.sciencedirect.com/science/article/pii/S1474667017317329>
+
+### 0.3 Other models considered and skipped for now
+
+These are documented in `ship_dynamics_candidates.md` and
+`ship_dynamics_intuition.md`. They are not on the implementation short-list
+because the AIS data we have cannot identify them without strong borrowed
+assumptions.
+
+- **MMG (Manoeuvring Modelling Group).** Hull, propeller and rudder are
+  modelled separately. Action space splits into rudder angle and propeller
+  revolutions — neither is observable from AIS. Roughly thirty interaction
+  coefficients per hull. Industry standard, deferred until a per-ship
+  identification pipeline exists.
+  - Yasukawa & Yoshimura, *Introduction of MMG standard method for ship
+    manoeuvring predictions*.
+    <https://link.springer.com/content/pdf/10.1007/978-981-97-0625-9_10.pdf>
+- **Abkowitz whole-ship model.** One polynomial in the ship's own motion and
+  rudder angle, with about seventy coefficients per hull. Data-hungry.
+  - <https://www.researchgate.net/publication/241105238_Identification_of_Abkowitz_Model_for_Ship_Manoeuvring_Motion_Using_e_-Support_Vector_Regression>
+- **Davidson–Schiff linear manoeuvring.** Sway and yaw inertia yes, but
+  forward speed is held constant by design — cannot represent "slow to
+  accelerate or decelerate".
+  - <https://arxiv.org/html/2502.18696v1>
+- **Fossen six-degree-of-freedom.** Adds roll, pitch, heave and wave loading.
+  Not in AIS data; defer until seakeeping becomes a goal.
+  - <https://onlinelibrary.wiley.com/doi/book/10.1002/9781119994138>
+- **Nomoto second-order.** Captures yaw overshoot but needs second-order
+  derivatives of heading, which are too noisy from 10-second AIS samples.
+  - <https://shipjournal.co/index.php/sst/article/view/160>
+- **Data-driven hybrids (Fossen plus neural residual, pure neural / Koopman
+  surrogates).** Useful later for sim-to-real on a specific hull; not
+  appropriate for the current AIS-replay scope.
+  - <https://arxiv.org/html/2502.18696v1>
+  - <https://link.springer.com/article/10.1007/s00773-024-01045-9>
+
+### 0.4 Recommendation
+
+For AIS-only data with realistic acceleration:
+
+1. Keep the existing **DeltaPos** dynamic for fast trajectory replay.
+2. Add a **Nomoto first-order with throttle** dynamic as the first ship-specific
+   model. Four parameters per ship-type, identifiable from AIS, gives the
+   simulator both turning-radius inertia and surge inertia.
+3. Add **Norrbin with throttle** as a one-coefficient upgrade for tankers and
+   bulk carriers.
+4. Consider **Fossen three-degree-of-freedom** only when borrowing hydrodynamic
+   coefficients from published ship templates is acceptable.
+
+Detailed plain-language descriptions of every candidate live in
+`ship_dynamics_intuition.md`; equations, comparison tables and the full
+reference list live in `ship_dynamics_candidates.md`.
 
 ---
 
